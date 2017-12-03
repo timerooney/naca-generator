@@ -1,17 +1,50 @@
 (page "index.html"
-  (:require [cljsjs.chartjs]))
+  (:require [[cljsjs.chartjs]
+             [clojure.math.numeric-tower :as math]]))
 
-; Variables
-(defc naca-input "0000")
+; Input variables
+(defc naca-input 2414)
 (defc length-input 1)
 (defc number-of-points-input 100)
 
-;Chart function
+; Airfoil calculations
+(defn thickness [T x]
+  (let [a0 0.2969
+        a1 -0.126
+        a2 -0.3516
+        a3 0.2843
+        a4 -0.1015]
+    (* (/ T 0.2)
+       (+ (* a0 (math/expt x 0.5))
+          (* a1 x)
+          (* a2 (math/expt x 2))
+          (* a3 (math/expt x 3))
+          (* a4 (math/expt x 4))))))
+
+(defn camber [M P x]
+  (if (< x P)
+      (* (/ M (math/expt P 2))
+         (- (* 2 P x) (math/expt x 2)))
+      (* (/ M (math/expt (- 1 P) 2))
+         (+ 1
+            (* -1 2 P)
+            (* 2 P x)
+            (* -1 (math/expt x 2))))))
+
+(defn airfoil [M P T xs]
+  (let [thickline (map #(thickness T %) xs)
+        camberline (map #(camber M P %) xs)]
+    {:camber-line camberline
+     :upper-line (map + camberline thickline)
+     :lower-line (map - camberline thickline)}))
+
+; Chart function
 (defn chart [chart-data]
   (with-let [self (canvas)]
     (let [context (.getContext self "2d")]
       (with-init! (cell= (js/Chart. context (clj->js chart-data)))))))
 
+; Chart data formula
 (def chart-data (cell=
   {:type "bar"
    :data {:labels ["2012" "2013" "2014" "2015" "2016"]
@@ -48,7 +81,9 @@
                 (div :class "form-group"
                   (label "NACA 4-digit code")
                   (div
-                    (input :type "text"
+                    (input :type "number"
+                           :min 0
+                           :max 9999
                            :value naca-input
                            :blur #((reset! naca-input @%)))))
                 (div :class "form-group"
