@@ -1,5 +1,6 @@
 (page "index.html"
-  (:require [cljsjs.chartjs]))
+  (:require [cljsjs.chartjs]
+            [cljsjs.filesaverjs]))
 
 ; Input variables
 (defc naca-input 2414)
@@ -52,23 +53,23 @@
             (Math/pow (- 1 P) 2))
          (- P x))))
 
-(defn airfoil [[M P T] xs]
+(defn airfoil [[M P T] xs scale]
   (let [thickline (map #(thickness T %) xs)
         camberline (map #(camber M P %) xs)
         cambergradient (map #(camber-gradient M P %) xs)
         thetas (map Math/atan cambergradient)
         costhetas (map Math/cos thetas)
         updatedline (map * thickline costhetas)]
-    {:camber-line camberline
-     :upper-line (map + camberline updatedline)
-     :lower-line (map - camberline updatedline)
+    {:camber-line (map #(* scale %) camberline)
+     :upper-line (map + camberline (map #(* scale %) updatedline))
+     :lower-line (map - camberline (map #(* scale %) updatedline))
      :updatedline updatedline}))
 
 (defn airfoil->chartjs [key raw-data xs scale]
   (let [dataset (key raw-data)]
     (->> (map list xs dataset)
          (map (fn [xy] {:x (* scale (first xy))
-                        :y (* scale (second xy))})))))
+                        :y (second xy)})))))
 
 ; Cells
 (def mpt
@@ -78,12 +79,12 @@
 (def xs
   (cell=
     (range 0
-           1
+           (+ 1 (/ 1 number-of-points-input))
            (/ 1 number-of-points-input))))
 
 (def airfoil-data-raw
   (cell=
-    (airfoil mpt xs)))
+    (airfoil mpt xs length-input)))
 
 (def mpt-display
   (cell=
@@ -94,6 +95,24 @@
     {:upper (airfoil->chartjs :upper-line airfoil-data-raw xs length-input)
      :lower (airfoil->chartjs :lower-line airfoil-data-raw xs length-input)
      :camber (airfoil->chartjs :camber-line airfoil-data-raw xs length-input)}))
+
+; Download function
+(defn download [filename content]
+  (let [blob (new js/Blob (clj->js [content])
+                          (clj->js {:type (str "txt/plain;charset=" (.-characterset js/document))}))]
+    (js/saveAs blob filename)))
+
+(def upper-output
+  (cell=
+    (->> (map list (map #(* length-input %) xs) (:upper-line airfoil-data-raw))
+         (map #(str (first %) "\t" (second %) "\t0\n"))
+         (apply str))))
+
+(def lower-output
+  (cell=
+    (->> (map list (map #(* length-input %) xs) (:lower-line airfoil-data-raw))
+         (map #(str (first %) "\t" (second %) "\t0\n"))
+         (apply str))))
 
 ; Chart function
 (defn chart [chart-data]
@@ -154,7 +173,7 @@
     (div :class "container"
       ; Page headings
       (h1 :class "display-4 text-center" "NACA 4-Digit Airfoil Generator")
-      (h3 :class "text-muted text-center" "Generates CSV files that can be imported into CREO Parametric")
+      (h3 :class "text-muted text-center" "Generates pts files that can be imported into CREO Parametric")
 
       ; Main content
       ;; Input area
@@ -189,13 +208,26 @@
                          :value number-of-points-input
                          :change #(reset! number-of-points-input @%))
                   (span :class "input-group-addon" "points")))))))
-      (div :class "row justify-content-center"
+
+      (div :class "row justify-content-center mt-4"
+        (div :class "col-6"
+          (div :class "card"
+            (div :class "card-header" "Downloads")
+            (div :class "container text-center"
+              (button :class "btn btn-outline-primary"
+                      :click #(download "upper.pts" @upper-output)
+                      "Upper airfoil download")
+              (span)
+              (button :class "btn btn-outline-primary"
+                      :click #(download "lower.pts" @lower-output)
+                      "Lower airfoil download")
+                  ))))
+      (div :class "row justify-content-center mt-4"
         (div :class "col-12"
           (div :class "card"
-            (div :class "card-header" "Output")
+            (div :class "card-header" "Graph")
             (div :class "container"
-              (chart chart-data)
-              )))))
+              (chart chart-data))))))
     
     ;; Load bootstrap dependencies
     (script :src "https://code.jquery.com/jquery-3.2.1.slim.min.js" :integrity "sha384-KJ3o2DKtIkvYIK3UENzmM7KCkRr/rE9/Qpg6aAZGJwFDMVNA/GpGFF93hXpG5KkN" :crossorigin "anonymous")
