@@ -1,11 +1,23 @@
 (page "index.html"
-  (:require [[cljsjs.chartjs]
-             [clojure.math.numeric-tower :as math]]))
+  (:require [cljsjs.chartjs]))
 
 ; Input variables
 (defc naca-input 2414)
 (defc length-input 1)
 (defc number-of-points-input 100)
+
+; Input functions
+(defn split-naca-code [number]
+  (let [M (/ (quot number 1000) 100)
+        P (-> number
+              (- (* M 100000))
+              (quot 100)
+              (/ 10))
+        T (-> number
+              (- (* M 100000))
+              (- (* P 1000))
+              (/ 100))]
+    [M P T]))
 
 ; Airfoil calculations
 (defn thickness [T x]
@@ -13,30 +25,75 @@
         a1 -0.126
         a2 -0.3516
         a3 0.2843
-        a4 -0.1015]
+        a4 -0.1036]
     (* (/ T 0.2)
-       (+ (* a0 (math/expt x 0.5))
+       (+ (* a0 (Math/pow x 0.5))
           (* a1 x)
-          (* a2 (math/expt x 2))
-          (* a3 (math/expt x 3))
-          (* a4 (math/expt x 4))))))
+          (* a2 (Math/pow x 2))
+          (* a3 (Math/pow x 3))
+          (* a4 (Math/pow x 4))))))
 
 (defn camber [M P x]
   (if (< x P)
-      (* (/ M (math/expt P 2))
-         (- (* 2 P x) (math/expt x 2)))
-      (* (/ M (math/expt (- 1 P) 2))
+      (* (/ M (Math/pow P 2))
+         (- (* 2 P x) (Math/pow x 2)))
+      (* (/ M (Math/pow (- 1 P) 2))
          (+ 1
-            (* -1 2 P)
+            (* -2 P)
             (* 2 P x)
-            (* -1 (math/expt x 2))))))
+            (* -1 (Math/pow x 2))))))
 
-(defn airfoil [M P T xs]
+(defn camber-gradient [M P x]
+  (if (< x P)
+      (* (/ (* 2 M)
+            (Math/pow P 2))
+         (- P x))
+      (* (/ (* 2 M)
+            (Math/pow (- 1 P) 2))
+         (- P x))))
+
+(defn airfoil [[M P T] xs]
   (let [thickline (map #(thickness T %) xs)
-        camberline (map #(camber M P %) xs)]
+        camberline (map #(camber M P %) xs)
+        cambergradient (map #(camber-gradient M P %) xs)
+        thetas (map Math/atan cambergradient)
+        costhetas (map Math/cos thetas)
+        updatedline (map * thickline costhetas)]
     {:camber-line camberline
-     :upper-line (map + camberline thickline)
-     :lower-line (map - camberline thickline)}))
+     :upper-line (map + camberline updatedline)
+     :lower-line (map - camberline updatedline)
+     :updatedline updatedline}))
+
+(defn airfoil->chartjs [key raw-data xs scale]
+  (let [dataset (key raw-data)]
+    (->> (map list xs dataset)
+         (map (fn [xy] {:x (* scale (first xy))
+                        :y (* scale (second xy))})))))
+
+; Cells
+(def mpt
+  (cell=
+    (split-naca-code naca-input)))
+
+(def xs
+  (cell=
+    (range 0
+           1
+           (/ 1 number-of-points-input))))
+
+(def airfoil-data-raw
+  (cell=
+    (airfoil mpt xs)))
+
+(def mpt-display
+  (cell=
+    (print mpt)))
+
+(def airfoil-data
+  (cell=
+    {:upper (airfoil->chartjs :upper-line airfoil-data-raw xs length-input)
+     :lower (airfoil->chartjs :lower-line airfoil-data-raw xs length-input)
+     :camber (airfoil->chartjs :camber-line airfoil-data-raw xs length-input)}))
 
 ; Chart function
 (defn chart [chart-data]
@@ -46,20 +103,50 @@
 
 ; Chart data formula
 (def chart-data (cell=
-  {:type "bar"
-   :data {:labels ["2012" "2013" "2014" "2015" "2016"]
-          :datasets [{:data [5 10 15 20 25]
-                      :label "Rev in MM"
-                      :backgroundColor "#90EE90"}
-                     {:data [3 6 9 12 15]
-                      :label "Cost in MM"
-                      :backgroundColor "#F08080"}]}
+  {:type "scatter"
+   :data {:datasets [
+            {:label "Upper"
+             :borderColor "red"
+             :data (:upper airfoil-data)}
+            {:label "Lower"
+             :borderColor "blue"
+             :data (:lower airfoil-data)}
+            {:label "Camber"
+             :borderColor "brown"
+             :data (:camber airfoil-data)}
+   ]}
    :options {
      :title {
        :display true :text (str "Airfoil with NACA 4-Digit Code " naca-input)
      }
+     :elements {
+       :point {
+         :radius 0
+       }
+       :line {
+         :fill false
+       }
+     }
+     :scales {
+       :yAxes [{
+         :ticks {
+           :min (* -0.30 length-input)
+           :max (* 0.30 length-input)
+         }
+         :scaleLabel {
+           :display true
+           :labelString "Height (m)"
+         }
+       }]
+       :xAxes [{
+         :scaleLabel {
+           :display true
+           :labelString "Length (m)"
+         }
+       }]}
    }}))
 
+; Webpage
 (html
   (head
     (link :href "https://maxcdn.bootstrapcdn.com/bootstrap/4.0.0-beta.2/css/bootstrap.min.css" :rel "stylesheet" :type "text/css" :integrity "sha384-PsH8R72JQ3SOdhVi3uxftmaW6Vc51MKb0q5P2rRUpPvrszuE4W1povHYgTpBfshb" :crossorigin "anonymous"))
@@ -69,39 +156,45 @@
       (h1 :class "display-4 text-center" "NACA 4-Digit Airfoil Generator")
       (h3 :class "text-muted text-center" "Generates CSV files that can be imported into CREO Parametric")
 
-      (chart chart-data)
-
       ; Main content
       ;; Input area
       (div :class "row justify-content-center"
         (div :class "col-6"
           (div :class "card"
             (div :class "card-header" "Input")
-              (form :class "container"
-                (div :class "form-group"
-                  (label "NACA 4-digit code")
-                  (div
-                    (input :type "number"
-                           :min 0
-                           :max 9999
-                           :value naca-input
-                           :blur #((reset! naca-input @%)))))
-                (div :class "form-group"
-                  (label "Airfoil length")
-                  (div :class "input-group"
-                    (input :type "number"
-                           :min 0
-                           :step "any"
-                           :value length-input)
-                    (span :class "input-group-addon" "meters")))
-                (div :class "form-group"
-                  (label "Number of points to generate")
-                  (div :class "input-group"
-                    (input :type "number"
-                           :min 10
-                           :step 1
-                           :value number-of-points-input)
-                    (span :class "input-group-addon" "points")))
+            (form :class "container"
+              (div :class "form-group"
+                (label "NACA 4-digit code")
+                (div
+                  (input :type "number"
+                         :min 0
+                         :max 9999
+                         :value naca-input
+                         :change #(reset! naca-input @%))))
+              (div :class "form-group"
+                (label "Airfoil length")
+                (div :class "input-group"
+                  (input :type "number"
+                         :min 1
+                         :step 0.5
+                         :value length-input
+                         :change #(reset! length-input @%))
+                  (span :class "input-group-addon" "meters")))
+              (div :class "form-group"
+                (label "Number of points to generate")
+                (div :class "input-group"
+                  (input :type "number"
+                         :min 10
+                         :step 1
+                         :value number-of-points-input
+                         :change #(reset! number-of-points-input @%))
+                  (span :class "input-group-addon" "points")))))))
+      (div :class "row justify-content-center"
+        (div :class "col-12"
+          (div :class "card"
+            (div :class "card-header" "Output")
+            (div :class "container"
+              (chart chart-data)
               )))))
     
     ;; Load bootstrap dependencies
